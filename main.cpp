@@ -11,8 +11,16 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include "model.hpp"
+#include "shader.hpp"
+
+#include <random>
+
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
 
 enum FIRE_STATUS
 {
@@ -39,11 +47,31 @@ void drawAmmo(unsigned int shader, unsigned int VAO, unsigned int wWidth, unsign
 void drawVoltmeter(unsigned int shaderBG, unsigned int shaderFG, unsigned int VAO_BG, unsigned int VAO_FG, unsigned int wWidth, unsigned int wHight, unsigned voltmeterTexture, float voltmeterValue, unsigned uVoltmeterValueLoc);
 void drawName(unsigned int shader, unsigned int VAO, unsigned int wWidth, unsigned int wHight, unsigned ammoTexture);
 void setupTexture(unsigned texture);
-void handleMove(GLFWwindow* window, bool hidraulic_on, bool view_in_cockpit, float default_movement_speed, float min_voltmeter_value, float voltmeter_value, float* offset_x, float max_offset_x, float* offset_y, float max_offset_y);
 void handleViewChange(GLFWwindow* window, bool* view_in_cockpit);
 void handleHidraulic(GLFWwindow* window, float* voltmeter_value, float voltmeter_speed, float min_voltmeter_value, float max_voltmeter_value, bool* hidraulic_on, HIDRAULIC_STATUS* hidraulic_status, int* hidraulic_oscilation);
 void drawTargets(unsigned int shader, unsigned int* VAOs, unsigned targetTexture, bool* tagets_hit);
-bool is_target_hit(float offset_x, float offset_y, float* target);
+bool is_target_hit(float tank_rotation, float target_rotation);
+
+void start2D() {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+}
+
+void start3D() {
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
+
+float getRandomFloat(float min, float max) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(min, max);
+    return dis(gen);
+}
+
+int getRandomInt(int min, int max) {
+    return min + (std::rand() % (max - min + 1));
+}
 
 int main(void)
 {
@@ -81,7 +109,6 @@ int main(void)
     }
 
     unsigned int unifiedShader = createShader("basic.vert", "basic.frag");
-    unsigned int moveShader = createShader("move.vert", "basic.frag");
     unsigned int lightShader = createShader("basic.vert", "light.frag");
     unsigned int arrowShader = createShader("arrow.vert", "arrow.frag");
 
@@ -121,8 +148,6 @@ int main(void)
 
     unsigned landscapeTexture = loadImageToTexture("res/landscape.jpg");
     setupTexture(landscapeTexture);
-
-    unsigned uOffsetLoc = glGetUniformLocation(moveShader, "uOffset");
 
     // LANDSCAPE - END
 
@@ -319,27 +344,226 @@ int main(void)
     bool hidraulic_on = true;
     FIRE_STATUS fire_status = FIRE_STATUS::READY;
     HIDRAULIC_STATUS hidraulic_status = HIDRAULIC_STATUS::IDLE;
-    float offset_x = 0;
-    float offset_y = 0;
-    float max_offset_x = 0.26;
-    float max_offset_y = 0.1;
-    float default_movement_speed = 0.001;
-    float voltmeter_value = -0.78;
-    float max_voltmeter_value = 0.78;
-    float min_voltmeter_value = -0.78;
-    float voltmeter_speed = 0.002;
+    float offset_y = 0.0f;
+    float offset_x = 0.0f;
+    float max_offset_y = 100.0f;
+    float default_movement_speed = 1.0f;
+    float voltmeter_value = -0.78f;
+    float max_voltmeter_value = 0.78f;
+    float min_voltmeter_value = -0.78f;
+    float voltmeter_speed = 0.002f;
     int number_of_ammunition = 6;
     int hidraulic_oscilation = 1;
     bool targets_hit[3] = { false, false, false };
 
+    bool zoom_active = false;
+    bool night_vision_active = false;
+    bool reflector_active = true;
+    float movement_speed;
+    int target_move_direction[3] = {1,-1,1};
+    float target_move_ammount[3] = { 0,0,0 };
+    float target_check[3] = { 0,0,0 };
+    float tank_rotation = 0.0f;
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    // Light cube
+    Shader fireCubeShader("cube.vert", "cube.frag");
+
+    float cube_vertices[] = {
+        -0.5f, -0.5f, -0.5f,
+         0.5f, -0.5f, -0.5f,
+         0.5f,  0.5f, -0.5f,
+         0.5f,  0.5f, -0.5f,
+        -0.5f,  0.5f, -0.5f,
+        -0.5f, -0.5f, -0.5f,
+
+        -0.5f, -0.5f,  0.5f,
+         0.5f, -0.5f,  0.5f,
+         0.5f,  0.5f,  0.5f,
+         0.5f,  0.5f,  0.5f,
+        -0.5f,  0.5f,  0.5f,
+        -0.5f, -0.5f,  0.5f,
+
+        -0.5f,  0.5f,  0.5f,
+        -0.5f,  0.5f, -0.5f,
+        -0.5f, -0.5f, -0.5f,
+        -0.5f, -0.5f, -0.5f,
+        -0.5f, -0.5f,  0.5f,
+        -0.5f,  0.5f,  0.5f,
+
+         0.5f,  0.5f,  0.5f,
+         0.5f,  0.5f, -0.5f,
+         0.5f, -0.5f, -0.5f,
+         0.5f, -0.5f, -0.5f,
+         0.5f, -0.5f,  0.5f,
+         0.5f,  0.5f,  0.5f,
+
+        -0.5f, -0.5f, -0.5f,
+         0.5f, -0.5f, -0.5f,
+         0.5f, -0.5f,  0.5f,
+         0.5f, -0.5f,  0.5f,
+        -0.5f, -0.5f,  0.5f,
+        -0.5f, -0.5f, -0.5f,
+
+        -0.5f,  0.5f, -0.5f,
+         0.5f,  0.5f, -0.5f,
+         0.5f,  0.5f,  0.5f,
+         0.5f,  0.5f,  0.5f,
+        -0.5f,  0.5f,  0.5f,
+        -0.5f,  0.5f, -0.5f,
+    };
+
+    unsigned int fireCubeVAO, fireCubeVBO;
+    glGenVertexArrays(1, &fireCubeVAO);
+    glGenBuffers(1, &fireCubeVBO);
+    glBindVertexArray(fireCubeVAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, fireCubeVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(cube_vertices), cube_vertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // 3D STARTS HERE
+
+    Shader main3DShader("main_3d.vert", "main_3d.frag");
+
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)wWidth / (float)wHeight, 0.1f, 100.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.01f, 3.0f, 2.01f), glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec3 firelightPos(-0.62, 3.15f, -2.7f);
+
+    glm::mat4 model = glm::mat4(1.0f);
+    glm::mat4 scene = glm::mat4(1.0f);
+    glm::mat4 cannon = glm::mat4(1.0f);
+    glm::mat4 targetMat = glm::mat4(1.0f);
+    Model plane("res/plane.obj");
+    Model tank("res/tank.obj");
+    Model target("res/target.obj");
+
+    cannon = glm::translate(cannon, glm::vec3(0.52f, 3.15f, -0.1f));
+    
+    main3DShader.use();
+    main3DShader.setVec3("viewPos", 0.01f, 3.0f, 2.01f);
+
+    float random_targets[] = { getRandomFloat(0.0, 0.33),  getRandomFloat(0.33, 0.66), getRandomFloat(0.66, 1.0) };
+
+    // Lights
+    // direction
+    main3DShader.setVec3("dirLight.direction", 2.2f, -1.0f, 2.1f);
+    main3DShader.setVec3("dirLight.ambient", 0.02f, 0.02f, 0.02f);
+    main3DShader.setVec3("dirLight.diffuse", 0.06f, 0.06f, 0.07f);
+    main3DShader.setVec3("dirLight.specular", 0.6f, 0.6f, 0.6f);
+    //point
+    main3DShader.setVec3("pointLights[0].position", firelightPos);
+    main3DShader.setVec3("pointLights[0].ambient", 0.0f, 0.0f, 0.0f);
+    main3DShader.setVec3("pointLights[0].diffuse", 0.0f, 0.0f, 0.0f);
+    main3DShader.setVec3("pointLights[0].specular", 0.0f, 0.0f, 0.0f);
+    main3DShader.setFloat("pointLights[0].constant", 0.01f);
+    main3DShader.setFloat("pointLights[0].linear", 0.01f);
+    main3DShader.setFloat("pointLights[0].quadratic", 0.01f);
+
+    main3DShader.setVec3("pointLights[1].position", 0.0, 0.0, 0.0);
+    main3DShader.setVec3("pointLights[1].ambient", 0.1f, 0.0f, 0.0f);
+    main3DShader.setVec3("pointLights[1].diffuse", 0.6f, 0.0f, 0.0f);
+    main3DShader.setVec3("pointLights[1].specular", 1.0f, 1.0f, 1.0f);
+    main3DShader.setFloat("pointLights[1].constant", 0.01f);
+    main3DShader.setFloat("pointLights[1].linear", 0.09f);
+    main3DShader.setFloat("pointLights[1].quadratic", 0.032f);
+
+    main3DShader.setVec3("pointLights[2].position", 0.0, 0.0, 0.0);
+    main3DShader.setVec3("pointLights[2].ambient", 0.0f, 0.1f, 0.0f);
+    main3DShader.setVec3("pointLights[2].diffuse", 0.0f, 0.6f, 0.0f);
+    main3DShader.setVec3("pointLights[2].specular", 1.0f, 1.0f, 1.0f);
+    main3DShader.setFloat("pointLights[2].constant", 0.01f);
+    main3DShader.setFloat("pointLights[2].linear", 0.09f);
+    main3DShader.setFloat("pointLights[2].quadratic", 0.032f);
+
+    main3DShader.setVec3("pointLights[3].position", 0.0, 0.0, 0.0);
+    main3DShader.setVec3("pointLights[3].ambient", 0.0f, 0.0f, 0.1f);
+    main3DShader.setVec3("pointLights[3].diffuse", 0.0f, 0.0f, 0.6f);
+    main3DShader.setVec3("pointLights[3].specular", 1.0f, 1.0f, 1.0f);
+    main3DShader.setFloat("pointLights[3].constant", 0.01f);
+    main3DShader.setFloat("pointLights[3].linear", 0.09f);
+    main3DShader.setFloat("pointLights[3].quadratic", 0.032f);
+    // spot
+    main3DShader.setVec3("spotLight.position", 0.01f, 3.0f, 2.02f);
+    main3DShader.setVec3("spotLight.direction", 0.0f, 0.0f, -1.0f);
+    main3DShader.setFloat("spotLight.cutOff", 20.0f);
+    main3DShader.setFloat("spotLight.outerCutOff", 30.0f);
+    main3DShader.setVec3("spotLight.ambient", 0.1f, 0.1f, 0.1f);
+    main3DShader.setVec3("spotLight.diffuse", 0.9f, 0.9f, 0.9f);
+    main3DShader.setVec3("spotLight.specular", 1.0f, 1.0f, 1.0f);
+    main3DShader.setFloat("spotLight.constant", 1.0f);
+    main3DShader.setFloat("spotLight.linear", 0.014f);
+    main3DShader.setFloat("spotLight.quadratic", 0.0007f);
+
+
     while (!glfwWindowShouldClose(window))
     {
-        glClearColor(0.0, 0.0, 0.0, 1.0);
-        glClear(GL_COLOR_BUFFER_BIT);
-        
+        glClearColor(0.06, 0.06, 0.09, 1.0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Drawing 3
+        start3D();
+
+        main3DShader.use();
+
+        main3DShader.setMat4("uM", scene);
+        main3DShader.setMat4("uV", view);
+        main3DShader.setMat4("uP", projection);
+        plane.Draw(main3DShader);
+
+        main3DShader.setMat4("uM", cannon);
+        tank.Draw(main3DShader);
+
+        for (int i = 0; i < 3; i++) {
+            if (targets_hit[i]) {
+                continue;
+            }
+            targetMat = scene;
+
+            float movement = getRandomInt(1, 200);
+            float side = 0;
+            if (movement == 100) {
+                target_move_direction[i] *= -1;
+            }
+            if (i % 2 == 0) {
+                side = 1;
+            }
+            else {
+                side = -1;
+            }
+            target_move_ammount[i] += target_move_direction[i] * 0.005;
+
+            targetMat = glm::rotate(targetMat, glm::radians(target_move_ammount[i]), glm::vec3(0.0f, 1.0f, 0.0f));
+            targetMat = glm::translate(targetMat, glm::vec3(target_move_ammount[i], 0.0, 0.0));
+
+            targetMat = glm::scale(targetMat, glm::vec3(0.75 + (0.25 * random_targets[i]), 0.75 + (0.25 * random_targets[i]), 0.75 + (0.25 * random_targets[i])));
+            targetMat = glm::rotate(targetMat, glm::radians(180 * random_targets[i]), glm::vec3(0.0f, 1.0f, 0.0f));
+            targetMat = glm::translate(targetMat, glm::vec3(side * 10.0 * random_targets[i], 0.0, -15.0 + (-10.0 * random_targets[i])));
+
+            std::string pointLightIndex = "pointLights[" + std::to_string(i + 1) + "].position";
+
+            glm::vec4 temp = targetMat * glm::vec4(0.0, 0.0, 0.0, 1.0);
+            main3DShader.setVec3(pointLightIndex, temp.x, temp.y, temp.z);
+
+            glm::vec3 tempVec(temp.x, temp.y, temp.z);
+            glm::vec3 normalizedTempVec = glm::normalize(tempVec - glm::vec3(0.01, 3.0,2.01));
+
+            float tempRotation = 360 - (180 * glm::acos(glm::dot(normalizedTempVec, glm::normalize(glm::vec3(0.0, 0.0, -1.0)))) / 3.14);
+            if(target_check[i] == 0)
+                target_check[i] = tempRotation;
+
+            main3DShader.setMat4("uM", targetMat);
+            target.Draw(main3DShader);
+        }
+
+        // Drawing 2D
+
+        start2D();
+
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         {
             glfwSetWindowShouldClose(window, GL_TRUE);
@@ -349,26 +573,199 @@ int main(void)
 
         handleHidraulic(window, &voltmeter_value, voltmeter_speed, min_voltmeter_value, max_voltmeter_value, &hidraulic_on, &hidraulic_status, &hidraulic_oscilation);
 
-        handleMove(window, hidraulic_on, view_in_cockpit, default_movement_speed, min_voltmeter_value, voltmeter_value, &offset_x, max_offset_x, &offset_y, max_offset_y);
+        if (!hidraulic_on) {
+            movement_speed = default_movement_speed;
+        }
+        else {
+            movement_speed = default_movement_speed + (abs(min_voltmeter_value) + voltmeter_value);
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+            tank_rotation -= 0.1f * movement_speed;
+            scene = glm::rotate(scene, glm::radians(-0.1f * movement_speed), glm::vec3(0.0f, 1.0f, 0.0f));
+            if (tank_rotation < 0.0) {
+                tank_rotation = 359.9;
+            }
+            if (tank_rotation > 360.0) {
+                tank_rotation = 0.01;
+            }
+        }
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+            tank_rotation += 0.1f * movement_speed;
+            scene = glm::rotate(scene, glm::radians(0.1f * movement_speed), glm::vec3(0.0f, 1.0f, 0.0f));
+            if (tank_rotation < 0) {
+                tank_rotation = 359;
+            }
+            if (tank_rotation > 360) {
+                tank_rotation = 0.01;
+            }
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+            if (!view_in_cockpit) {
+                offset_y += movement_speed;
+            }
+            if (offset_y >= max_offset_y) {
+                offset_y = max_offset_y;
+            }
+            else {
+                cannon = glm::rotate(cannon, glm::radians(0.05f * -movement_speed), glm::vec3(1.0f, 0.0f, 0.0f));
+                cannon = glm::translate(cannon, glm::vec3(0.0f, -movement_speed * 0.001, 0.0f));
+            }
+        }
+        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+            if (!view_in_cockpit) {
+                offset_y -= movement_speed;
+            }
+            if (offset_y <= -max_offset_y) {
+                offset_y = -max_offset_y;
+            }
+            else {
+                cannon = glm::rotate(cannon, glm::radians(0.05f * movement_speed), glm::vec3(1.0f, 0.0f, 0.0f));
+                cannon = glm::translate(cannon, glm::vec3(0.0f, movement_speed * 0.001, 0.0f));
+            }
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) {
+            if (glfwGetTime() > 0.2) {
+                if (zoom_active) {
+                    projection = glm::perspective(glm::radians(45.0f), (float)wWidth / (float)wHeight, 0.1f, 100.0f);
+                }
+                else {
+                    projection = glm::perspective(glm::radians(30.0f), (float)wWidth / (float)wHeight, 0.1f, 100.0f);
+                }
+                glfwSetTime(0);
+                zoom_active = !zoom_active;
+            }
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
+            if (glfwGetTime() > 0.2) {
+                if (reflector_active) {
+                    main3DShader.setFloat("spotLight.cutOff", 0.0f);
+                }
+                else {
+                    main3DShader.setFloat("spotLight.cutOff", 20.0f);
+                }
+                glfwSetTime(0);
+                reflector_active = !reflector_active;
+            }
+        }
+
+        if (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) {
+            if (glfwGetTime() > 0.2) {
+                main3DShader.use();
+                if (night_vision_active) {
+                    main3DShader.setVec3("dirLight.direction", 2.2f, -1.0f, 2.1f);
+                    main3DShader.setVec3("dirLight.ambient", 0.02f, 0.02f, 0.02f);
+                    main3DShader.setVec3("dirLight.diffuse", 0.06f, 0.06f, 0.07f);
+                    main3DShader.setVec3("dirLight.specular", 0.8f, 0.8f, 0.8f);
+                }
+                else {
+                    main3DShader.setVec3("dirLight.direction", 2.2f, -1.0f, 2.1f);
+                    main3DShader.setVec3("dirLight.ambient", 0.0f, 0.5f, 0.0f);
+                    main3DShader.setVec3("dirLight.diffuse", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("dirLight.specular", 1.0f, 1.0f, 1.0f);
+                }
+                glfwSetTime(0);
+                night_vision_active = !night_vision_active;
+            }
+        }
 
         if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
             if (number_of_ammunition > 0 && fire_status == FIRE_STATUS::READY && !view_in_cockpit) {
                 fire_status = FIRE_STATUS::TIMEOUT;
+
+                // Fire light START
+                fireCubeShader.use();
+                fireCubeShader.setVec3("color", 1.0f, 1.0f, 0.6f);
+                fireCubeShader.setFloat("oppacity", 0.5);
+                fireCubeShader.setMat4("projection", projection);
+                fireCubeShader.setMat4("view", view);
+
+                glBindVertexArray(fireCubeVAO);
+                model = glm::mat4(1.0f);
+                model = glm::translate(model, firelightPos);
+                model = glm::scale(model, glm::vec3(0.2f));
+                fireCubeShader.setMat4("model", model);
+
+                glDrawArrays(GL_TRIANGLES, 0, 36);
+
+                //smoke
+                fireCubeShader.setVec3("color", 1.0f, 1.0f, 1.0f);
+                fireCubeShader.setFloat("oppacity", 1.0);
+                model = glm::scale(model, glm::vec3(2.0f));
+                fireCubeShader.setMat4("model", model);
+                glDrawArrays(GL_TRIANGLES, 0, 36);
+
+                main3DShader.use();
+                main3DShader.setVec3("pointLights[0].ambient", 0.99f, 0.99f, 0.99f);
+                main3DShader.setVec3("pointLights[0].diffuse", 0.99f, 0.99f, 0.99f);
+                main3DShader.setVec3("pointLights[0].specular", 1.0f, 1.0f, 1.0f);
+                // Fire light END
+
                 glfwSetTime(0);
                 number_of_ammunition -= 1;
-                if (is_target_hit(offset_x, offset_y, target1)) {
+
+                if (targets_hit[0]==false && is_target_hit(tank_rotation, target_check[0])) {
                     targets_hit[0] = true;
+                    main3DShader.use();
+                    main3DShader.setVec3("pointLights[1].ambient", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("pointLights[1].diffuse", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("pointLights[1].specular", 0.0f, 0.0f, 0.0f);
                 }
-                if (is_target_hit(offset_x, offset_y, target2)) {
+                if (targets_hit[1] == false && is_target_hit(tank_rotation, target_check[1])) {
                     targets_hit[1] = true;
+                    main3DShader.use();
+                    main3DShader.setVec3("pointLights[2].ambient", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("pointLights[2].diffuse", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("pointLights[2].specular", 0.0f, 0.0f, 0.0f);
                 }
-                if (is_target_hit(offset_x, offset_y, target3)) {
+                if (targets_hit[2] == false && is_target_hit(tank_rotation, target_check[2])) {
                     targets_hit[2] = true;
+                    main3DShader.use();
+                    main3DShader.setVec3("pointLights[3].ambient", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("pointLights[3].diffuse", 0.0f, 0.0f, 0.0f);
+                    main3DShader.setVec3("pointLights[3].specular", 0.0f, 0.0f, 0.0f);
                 }
             }
-            if(number_of_ammunition <= 0) {
+            if (number_of_ammunition <= 0) {
                 fire_status = FIRE_STATUS::OUT_OF_AMMO;
-            } 
+            }
+        }
+        if (fire_status == FIRE_STATUS::TIMEOUT) {
+            //smoke
+            fireCubeShader.use();
+            fireCubeShader.setVec3("color", 1.0f, 1.0f, 1.0f);
+            fireCubeShader.setFloat("oppacity", 0.6f - glfwGetTime() / 2.0f);
+            model = glm::mat4(1.0f);
+            model = glm::translate(model, firelightPos);
+            model = glm::scale(model, glm::vec3(glfwGetTime()));
+            fireCubeShader.setMat4("model", model);
+            glBindVertexArray(fireCubeVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 36);
+
+            if (glfwGetTime() > 0.1) {
+                main3DShader.use();
+                main3DShader.setVec3("pointLights[0].ambient", 0.0f, 0.0f, 0.0f);
+                main3DShader.setVec3("pointLights[0].diffuse", 0.0f, 0.0f, 0.0f);
+                main3DShader.setVec3("pointLights[0].specular", 0.0f, 0.0f, 0.0f);
+            }
+            else {
+                fireCubeShader.use();
+                fireCubeShader.setVec3("color", 1.0f, 1.0f, 0.6f);
+                fireCubeShader.setFloat("oppacity", 0.5);
+                fireCubeShader.setMat4("projection", projection);
+                fireCubeShader.setMat4("view", view);
+
+                glBindVertexArray(fireCubeVAO);
+                model = glm::mat4(1.0f);
+                model = glm::translate(model, firelightPos);
+                model = glm::scale(model, glm::vec3(0.2f));
+                fireCubeShader.setMat4("model", model);
+
+                glDrawArrays(GL_TRIANGLES, 0, 36);
+            }
         }
         if (glfwGetTime() > 7.5) {
             if (number_of_ammunition > 0) {
@@ -378,7 +775,6 @@ int main(void)
                 fire_status = FIRE_STATUS::OUT_OF_AMMO;
             }
             hidraulic_status = HIDRAULIC_STATUS::IDLE;
-            
         }
 
         glUseProgram(lightShader);
@@ -386,25 +782,17 @@ int main(void)
             glUniform3f(uLightColorLoc, 1.0, 1.0, 0.0);
         }
         else if (fire_status == FIRE_STATUS::OUT_OF_AMMO) {
-            glUniform3f(uLightColorLoc, 255.0/255.0, 51.0/255.0, 51.0/255.0);
+            glUniform3f(uLightColorLoc, 255.0 / 255.0, 51.0 / 255.0, 51.0 / 255.0);
         }
         else {
             glUniform3f(uLightColorLoc, 0.2, 0.2, 0.2);
         }
 
-        glUseProgram(moveShader);
-        glUniform2f(uOffsetLoc, offset_x, offset_y);
-
         if (!view_in_cockpit) {
-
-            unsigned int targetVAOs[3] = {VAO[3], VAO[4], VAO[5] };
-
-            drawLandscape(moveShader, VAO[0], landscapeTexture);
-            drawTargets(moveShader, targetVAOs , targetTexture, targets_hit);
             drawSight(unifiedShader, VAO[0], sightTexture);
         }
         else {
-            drawLandscape(moveShader, VAO[0], cockpitTexture);
+            drawLandscape(unifiedShader, VAO[0], cockpitTexture);
             drawSight(unifiedShader, VAO[0], sightBlankTexture);
         }
 
@@ -430,26 +818,47 @@ int main(void)
 
         glfwSwapBuffers(window);
         glfwPollEvents();
-
     }
 
 
     glDeleteTextures(1, &landscapeTexture);
+    glDeleteTextures(1, &cockpitTexture);
+    glDeleteTextures(1, &sightTexture);
+    glDeleteTextures(1, &sightBlankTexture);
+    glDeleteTextures(1, &ammo0Texture);
+    glDeleteTextures(1, &ammo1Texture);
+    glDeleteTextures(1, &ammo2Texture);
+    glDeleteTextures(1, &ammo3Texture);
+    glDeleteTextures(1, &ammo4Texture);
+    glDeleteTextures(1, &ammo5Texture);
+    glDeleteTextures(1, &ammo6Texture);
+    glDeleteTextures(1, &nameTexture);
+    glDeleteTextures(1, &voltmeterTexture);
+    glDeleteTextures(1, &targetTexture);
     glDeleteBuffers(1, &VBO);
-    glDeleteVertexArrays(2, VAO);
+    glDeleteBuffers(1, &VBO2);
+    glDeleteBuffers(1, &VBO3);
+    glDeleteBuffers(1, &VBO4);
+    glDeleteBuffers(1, &VBO5);
+    glDeleteBuffers(1, &VBO6);
+    glDeleteVertexArrays(6, VAO);
+    glDeleteVertexArrays(1, &fireCubeVAO);
     glDeleteProgram(unifiedShader);
+    glDeleteProgram(lightShader);
+    glDeleteProgram(arrowShader);
 
     glfwTerminate();
     return 0;
 }
 
-bool is_target_hit(float offset_x, float offset_y, float *target) {
-    float x_min = target[0];
-    float y_min = target[1];
-    float x_max = target[8];
-    float y_max = target[9];
-
-    return ((-offset_x) > x_min && (-offset_x) < x_max && (- offset_y) > y_min && (-offset_y) < y_max );
+bool is_target_hit(float tank_rotation, float target_rotation) {
+    if (tank_rotation > 340 && target_rotation < 20) {
+        return true;
+    }
+    if (tank_rotation < 20 && target_rotation > 340) {
+        return true;
+    }
+    return abs(tank_rotation - target_rotation) < 20;
 }
 
 void handleViewChange(GLFWwindow* window, bool *view_in_cockpit) {
@@ -501,49 +910,6 @@ void handleHidraulic(GLFWwindow* window, float *voltmeter_value, float voltmeter
         }
         if (glfwGetTime() > 1.5) {
             *hidraulic_status = HIDRAULIC_STATUS::IDLE;
-        }
-    }
-}
-
-void handleMove(GLFWwindow* window,bool hidraulic_on, bool view_in_cockpit, float default_movement_speed, float min_voltmeter_value, float voltmeter_value, float *offset_x, float max_offset_x, float *offset_y, float max_offset_y) {
-    float movement_speed;
-    if (!hidraulic_on) {
-        movement_speed = default_movement_speed / 10;
-    }
-    else {
-        movement_speed = default_movement_speed + ((abs(min_voltmeter_value) + voltmeter_value) / 500);
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
-        if (!view_in_cockpit) {
-            *offset_x += movement_speed;
-        }
-        if (*offset_x >= max_offset_x) {
-            *offset_x = max_offset_x;
-        }
-    }
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
-        if (!view_in_cockpit) {
-            *offset_x -= movement_speed;
-        }
-        if (*offset_x <= -max_offset_x) {
-            *offset_x = -max_offset_x;
-        }
-    }
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
-        if (!view_in_cockpit) {
-            *offset_y += movement_speed;
-        }
-        if (*offset_y >= max_offset_y) {
-            *offset_y = max_offset_y;
-        }
-    }
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
-        if (!view_in_cockpit) {
-            *offset_y -= movement_speed;
-        }
-        if (*offset_y <= -max_offset_y) {
-            *offset_y = -max_offset_y;
         }
     }
 }
